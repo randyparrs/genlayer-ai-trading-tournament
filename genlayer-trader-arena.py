@@ -23,8 +23,8 @@ class AITradingTournament(gl.Contract):
     claimed: DynArray[str]
     user_stats: DynArray[str]
 
-    def __init__(self, owner_address: str):
-        self.owner = Address(owner_address)
+    def __init__(self, owner_address: Address):
+        self.owner = owner_address
         self.round_counter = u256(0)
         self.initialized = False
         self.min_round_interval = u256(300)
@@ -44,11 +44,11 @@ class AITradingTournament(gl.Contract):
             f"Name: {name} | "
             f"Personality: {self._aget(agent_id, 'personality')} | "
             f"Cash: ${self._aget(agent_id, 'cash')} | "
-            f"BTC: {self._aget(agent_id, 'btc')} | "
-            f"ETH: {self._aget(agent_id, 'eth')} | "
-            f"SOL: {self._aget(agent_id, 'sol')} | "
-            f"BNB: {self._aget(agent_id, 'bnb')} | "
-            f"HYPE: {self._aget(agent_id, 'hype')} | "
+            f"BTC: {self._fmt_asset(self._aget(agent_id, 'btc'))} | "
+            f"ETH: {self._fmt_asset(self._aget(agent_id, 'eth'))} | "
+            f"SOL: {self._fmt_asset(self._aget(agent_id, 'sol'))} | "
+            f"BNB: {self._fmt_asset(self._aget(agent_id, 'bnb'))} | "
+            f"HYPE: {self._fmt_asset(self._aget(agent_id, 'hype'))} | "
             f"Portfolio Value: ${self._aget(agent_id, 'portfolio_value')} | "
             f"Trades: {self._aget(agent_id, 'trade_count')} | "
             f"Wins: {self._aget(agent_id, 'wins')} | "
@@ -107,12 +107,11 @@ class AITradingTournament(gl.Contract):
     def can_execute_now(self) -> str:
         if int(self.last_round_block) == 0:
             return "READY:0"
-        
+
         blocks_passed = int(self.block_counter) - int(self.last_round_block)
-        
         estimated_seconds = blocks_passed * 30
         interval = int(self.min_round_interval)
-        
+
         if estimated_seconds >= interval:
             return "READY:0"
         else:
@@ -185,11 +184,11 @@ class AITradingTournament(gl.Contract):
                 break
         if not winner_data:
             return "Round not completed"
-        
+
         parts = winner_data.split("|")
         winner_agent = parts[0].strip()
         prize_per_unit = int(parts[1].strip()) if len(parts) > 1 else 0
-        
+
         winners = {}
         prefix = f"{round_id}:"
         for i in range(len(self.bets)):
@@ -203,10 +202,10 @@ class AITradingTournament(gl.Contract):
                         winners[bettor] += amount * prize_per_unit
                     else:
                         winners[bettor] = amount * prize_per_unit
-        
+
         if not winners:
             return f"Round {round_id} had no winners (rollover triggered)"
-        
+
         result = f"Round {round_id} winners ({len(winners)} users):"
         for addr, prize in winners.items():
             result += f" | {addr[:6]}...{addr[-4:]}: {prize}pts"
@@ -218,7 +217,7 @@ class AITradingTournament(gl.Contract):
         total_winnings = 0
         rounds_executed = 0
         agents_supported = [0, 0, 0, 0, 0]
-        
+
         for i in range(len(self.bets)):
             entry = self.bets[i]
             parts = entry.split(":")
@@ -226,7 +225,7 @@ class AITradingTournament(gl.Contract):
                 total_bets += int(parts[3])
                 if parts[2].isdigit() and 0 <= int(parts[2]) < 5:
                     agents_supported[int(parts[2])] += int(parts[3])
-        
+
         for i in range(len(self.claimed)):
             entry = self.claimed[i]
             parts = entry.split(":")
@@ -234,7 +233,7 @@ class AITradingTournament(gl.Contract):
                 claim_addr = parts[1]
                 if claim_addr.lower() == user_address.lower():
                     total_winnings += int(parts[2])
-        
+
         for i in range(len(self.user_stats)):
             entry = self.user_stats[i]
             if entry.startswith(f"executor:{user_address.lower()}:"):
@@ -242,7 +241,7 @@ class AITradingTournament(gl.Contract):
                 if len(parts) >= 3:
                     rounds_executed = int(parts[2])
                     break
-        
+
         favorite_agent = 0
         max_bets = 0
         for i in range(5):
@@ -250,7 +249,7 @@ class AITradingTournament(gl.Contract):
                 max_bets = agents_supported[i]
                 favorite_agent = i
         favorite_name = self._aget(str(favorite_agent), "name") or "None"
-        
+
         return (
             f"User: {user_address} | "
             f"Total Bets: {total_bets} points | "
@@ -304,11 +303,11 @@ class AITradingTournament(gl.Contract):
             self._aset(agent_id, "name", name)
             self._aset(agent_id, "personality", personality)
             self._aset(agent_id, "cash", "10000")
-            self._aset(agent_id, "btc", "0.00")
-            self._aset(agent_id, "eth", "0.00")
-            self._aset(agent_id, "sol", "0.00")
-            self._aset(agent_id, "bnb", "0.00")
-            self._aset(agent_id, "hype", "0.00")
+            self._aset(agent_id, "btc", "0")
+            self._aset(agent_id, "eth", "0")
+            self._aset(agent_id, "sol", "0")
+            self._aset(agent_id, "bnb", "0")
+            self._aset(agent_id, "hype", "0")
             self._aset(agent_id, "portfolio_value", "10000")
             self._aset(agent_id, "trade_count", "0")
             self._aset(agent_id, "wins", "0")
@@ -332,7 +331,7 @@ class AITradingTournament(gl.Contract):
         assert agent_id in ("0", "1", "2", "3", "4"), "Invalid agent ID"
 
         self.block_counter = u256(int(self.block_counter) + 1)
-        
+
         bet_amount = 1
         caller = str(gl.message.sender_address)
         current_round = str(int(self.round_counter))
@@ -341,14 +340,14 @@ class AITradingTournament(gl.Contract):
         self.prize_pool = u256(int(self.prize_pool) + bet_amount)
 
         agent_name = self._aget(agent_id, "name")
-        
+
         total_user_bets = 0
         for i in range(len(self.bets)):
             entry = self.bets[i]
             parts = entry.split(":")
             if len(parts) >= 4 and parts[0] == current_round and parts[1].lower() == caller.lower() and parts[2] == agent_id:
                 total_user_bets += int(parts[3])
-        
+
         return f"Bet placed on {agent_name} for Round {current_round}. Your total on this agent: {total_user_bets}pts. Pool: {int(self.prize_pool)}pts."
 
     @gl.public.write
@@ -399,7 +398,7 @@ class AITradingTournament(gl.Contract):
         current_block = int(self.block_counter)
         last_block = int(self.last_round_block)
         interval = int(self.min_round_interval)
-        
+
         if last_block > 0:
             blocks_passed = current_block - last_block
             estimated_seconds = blocks_passed * 30
@@ -424,11 +423,11 @@ class AITradingTournament(gl.Contract):
                 response = gl.nondet.web.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,hyperliquid&vs_currencies=usd")
                 raw = response.body.decode("utf-8")
                 price_data = json.loads(raw)
-                prices["btc"] = price_data.get("bitcoin", {}).get("usd", 60000)
-                prices["eth"] = price_data.get("ethereum", {}).get("usd", 3000)
-                prices["sol"] = price_data.get("solana", {}).get("usd", 150)
-                prices["bnb"] = price_data.get("binancecoin", {}).get("usd", 600)
-                prices["hype"] = price_data.get("hyperliquid", {}).get("usd", 30)
+                prices["btc"] = int(price_data.get("bitcoin", {}).get("usd", 60000))
+                prices["eth"] = int(price_data.get("ethereum", {}).get("usd", 3000))
+                prices["sol"] = int(price_data.get("solana", {}).get("usd", 150))
+                prices["bnb"] = int(price_data.get("binancecoin", {}).get("usd", 600))
+                prices["hype"] = int(price_data.get("hyperliquid", {}).get("usd", 30))
             except Exception:
                 pass
 
@@ -492,11 +491,11 @@ No extra text."""
         data = json.loads(raw)
 
         prices = {
-            "btc": data["btc_price"],
-            "eth": data["eth_price"],
-            "sol": data["sol_price"],
-            "bnb": data["bnb_price"],
-            "hype": data["hype_price"],
+            "btc": int(data["btc_price"]),
+            "eth": int(data["eth_price"]),
+            "sol": int(data["sol_price"]),
+            "bnb": int(data["bnb_price"]),
+            "hype": int(data["hype_price"]),
         }
 
         round_summary = []
@@ -506,10 +505,11 @@ No extra text."""
             decision = data[agent_key]
             action = decision["action"]
             asset = decision.get("asset", "none")
-            percentage = decision.get("percentage", 0)
+            percentage = int(decision.get("percentage", 0))
             reason = decision.get("reason", "")
 
-            cash = float(self._aget(agent_id, "cash") or "10000")
+            # Cash stored as whole dollars (integer)
+            cash = int(self._aget(agent_id, "cash") or "10000")
             trade_count = int(self._aget(agent_id, "trade_count") or "0")
             wins = int(self._aget(agent_id, "wins") or "0")
             losses = int(self._aget(agent_id, "losses") or "0")
@@ -517,33 +517,36 @@ No extra text."""
             trade_record = f"R{round_id}:{action}:{asset}:{percentage}%"
 
             if action == "BUY" and asset in prices and prices[asset] > 0:
-                spend = cash * (percentage / 100.0)
+                # spend in whole dollars
+                spend = cash * percentage // 100
                 if spend > 0:
-                    asset_amount = float(self._aget(agent_id, asset) or "0")
-                    new_amount = asset_amount + (spend / prices[asset])
-                    self._aset(agent_id, asset, f"{new_amount:.4f}")
-                    self._aset(agent_id, "cash", f"{cash - spend:.2f}")
+                    # assets stored as scaled integers where 10000 = 1.0 unit
+                    asset_scaled = int(self._aget(agent_id, asset) or "0")
+                    bought_scaled = spend * 10000 // prices[asset]
+                    self._aset(agent_id, asset, str(asset_scaled + bought_scaled))
+                    self._aset(agent_id, "cash", str(cash - spend))
                     trade_count += 1
                     self._aset(agent_id, "trade_count", str(trade_count))
-                    self.trade_history.append(f"{agent_id}:{trade_record} bought ${spend:.2f} of {asset.upper()} - {reason}")
+                    self.trade_history.append(f"{agent_id}:{trade_record} bought ${spend} of {asset.upper()} - {reason}")
             elif action == "SELL" and asset in prices and prices[asset] > 0:
-                asset_amount = float(self._aget(agent_id, asset) or "0")
-                sell_amount = asset_amount * (percentage / 100.0)
-                if sell_amount > 0:
-                    proceeds = sell_amount * prices[asset]
-                    self._aset(agent_id, asset, f"{asset_amount - sell_amount:.4f}")
-                    self._aset(agent_id, "cash", f"{cash + proceeds:.2f}")
+                asset_scaled = int(self._aget(agent_id, asset) or "0")
+                sell_scaled = asset_scaled * percentage // 100
+                if sell_scaled > 0:
+                    proceeds = sell_scaled * prices[asset] // 10000
+                    self._aset(agent_id, asset, str(asset_scaled - sell_scaled))
+                    self._aset(agent_id, "cash", str(cash + proceeds))
                     trade_count += 1
                     self._aset(agent_id, "trade_count", str(trade_count))
-                    self.trade_history.append(f"{agent_id}:{trade_record} sold ${proceeds:.2f} of {asset.upper()} - {reason}")
+                    self.trade_history.append(f"{agent_id}:{trade_record} sold ${proceeds} of {asset.upper()} - {reason}")
             else:
                 self.trade_history.append(f"{agent_id}:{trade_record} HOLD - {reason}")
 
-            new_cash = float(self._aget(agent_id, "cash") or "10000")
+            # Portfolio value in whole dollars
+            new_cash = int(self._aget(agent_id, "cash") or "10000")
             portfolio_value = new_cash
             for token in ("btc", "eth", "sol", "bnb", "hype"):
-                amount = float(self._aget(agent_id, token) or "0")
-                portfolio_value += amount * prices[token]
+                scaled = int(self._aget(agent_id, token) or "0")
+                portfolio_value += scaled * prices[token] // 10000
 
             old_value = old_values[agent_id]
             if portfolio_value > old_value:
@@ -553,9 +556,9 @@ No extra text."""
                 losses += 1
                 self._aset(agent_id, "losses", str(losses))
 
-            self._aset(agent_id, "portfolio_value", f"{int(portfolio_value)}")
+            self._aset(agent_id, "portfolio_value", str(portfolio_value))
             name = self._aget(agent_id, "name")
-            round_summary.append(f"{name}: {action} {asset.upper()} ({percentage}%) -> ${int(portfolio_value)}")
+            round_summary.append(f"{name}: {action} {asset.upper()} ({percentage}%) -> ${portfolio_value}")
 
         winner_id = "0"
         best_gain = -999999999
@@ -621,6 +624,12 @@ No extra text."""
         self.last_round_block = u256(current_block)
 
         return f"Round {round_id} executed! Winner: {winner_name} with +${best_gain}. Executor reward: {executor_reward}pts."
+
+    def _fmt_asset(self, val: str) -> str:
+        v = int(val or "0")
+        whole = v // 10000
+        frac = v % 10000
+        return f"{whole}.{frac:04d}"
 
     def _aget(self, agent_id: str, field: str) -> str:
         key = f"{agent_id}_{field}:"
