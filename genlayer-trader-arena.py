@@ -11,6 +11,8 @@ class AITradingTournament(gl.Contract):
     initialized: bool
     min_round_interval: u256
     last_round_timestamp: u256
+    last_round_block: u256
+    block_counter: u256
     prize_pool: u256
     rollover_pool: u256
     agent_data: DynArray[str]
@@ -19,13 +21,16 @@ class AITradingTournament(gl.Contract):
     bets: DynArray[str]
     winners_data: DynArray[str]
     claimed: DynArray[str]
+    user_stats: DynArray[str]
 
-    def __init__(self, owner_address: Address):
-        self.owner = owner_address
+    def __init__(self, owner_address: str):
+        self.owner = Address(owner_address)
         self.round_counter = u256(0)
         self.initialized = False
         self.min_round_interval = u256(300)
         self.last_round_timestamp = u256(0)
+        self.last_round_block = u256(0)
+        self.block_counter = u256(0)
         self.prize_pool = u256(0)
         self.rollover_pool = u256(0)
 
@@ -88,19 +93,37 @@ class AITradingTournament(gl.Contract):
 
     @gl.public.view
     def get_pool_status(self) -> str:
-        current_round = int(self.round_counter)
         return (
-            f"Current Round: {current_round}\n"
-            f"Active Prize Pool: {int(self.prize_pool)} GEN\n"
-            f"Rollover Pool: {int(self.rollover_pool)} GEN\n"
-            f"Min Interval: {int(self.min_round_interval)} seconds\n"
-            f"Last Round Timestamp: {int(self.last_round_timestamp)}"
+            f"Current Round: {int(self.round_counter)} | "
+            f"Active Prize Pool: {int(self.prize_pool)} points | "
+            f"Rollover Pool: {int(self.rollover_pool)} points | "
+            f"Min Interval: {int(self.min_round_interval)} seconds | "
+            f"Last Round Timestamp: {int(self.last_round_timestamp)} | "
+            f"Last Round Block: {int(self.last_round_block)} | "
+            f"Block Counter: {int(self.block_counter)}"
         )
+
+    @gl.public.view
+    def can_execute_now(self) -> str:
+        if int(self.last_round_block) == 0:
+            return "READY:0"
+        
+        blocks_passed = int(self.block_counter) - int(self.last_round_block)
+        
+        estimated_seconds = blocks_passed * 30
+        interval = int(self.min_round_interval)
+        
+        if estimated_seconds >= interval:
+            return "READY:0"
+        else:
+            remaining = interval - estimated_seconds
+            return f"WAIT:{remaining}"
 
     @gl.public.view
     def get_bets_for_round(self, round_id: str) -> str:
         total_bets = 0
         bets_per_agent = [0, 0, 0, 0, 0]
+        bettors_per_agent = [0, 0, 0, 0, 0]
         prefix = f"{round_id}:"
         for i in range(len(self.bets)):
             entry = self.bets[i]
@@ -111,12 +134,18 @@ class AITradingTournament(gl.Contract):
                     amount = int(parts[3])
                     if agent_id.isdigit() and 0 <= int(agent_id) < 5:
                         bets_per_agent[int(agent_id)] += amount
+                        bettors_per_agent[int(agent_id)] += 1
                         total_bets += amount
-        result = f"Round {round_id} Bets - Total: {total_bets} GEN"
+        result = f"Round {round_id} | Total Bets: {total_bets} points | Bettors: {sum(bettors_per_agent)}"
         for i in range(5):
             name = self._aget(str(i), "name") or f"Agent {i}"
-            result += f" | {name}: {bets_per_agent[i]} GEN"
+            result += f" | {name}: {bets_per_agent[i]}pts ({bettors_per_agent[i]} users)"
         return result
+
+    @gl.public.view
+    def get_active_bets_summary(self) -> str:
+        current_round = str(int(self.round_counter))
+        return self.get_bets_for_round(current_round)
 
     @gl.public.view
     def get_my_bets(self, user_address: str) -> str:
@@ -125,7 +154,8 @@ class AITradingTournament(gl.Contract):
             entry = self.bets[i]
             parts = entry.split(":")
             if len(parts) >= 5 and parts[1].lower() == user_address.lower():
-                my_bets.append(f"R{parts[0]} on Agent {parts[2]}: {parts[3]} GEN")
+                agent_name = self._aget(parts[2], "name") or f"Agent {parts[2]}"
+                my_bets.append(f"R{parts[0]} on {agent_name}: {parts[3]}pts")
         if not my_bets:
             return "No bets found"
         return f"User has {len(my_bets)} bet(s): " + " || ".join(my_bets[-20:])
@@ -140,7 +170,95 @@ class AITradingTournament(gl.Contract):
                 break
         if not winner_data:
             return "Round winner not yet determined"
-        return f"Round {round_id} winner: {winner_data}"
+        parts = winner_data.split("|")
+        winner_id = parts[0].strip()
+        winner_name = self._aget(winner_id, "name") or f"Agent {winner_id}"
+        return f"Round {round_id} winner: {winner_name} (Agent ID {winner_id}) | Prize per unit: {parts[1] if len(parts) > 1 else 0}pts"
+
+    @gl.public.view
+    def get_round_winning_bets(self, round_id: str) -> str:
+        winner_data = ""
+        for i in range(len(self.winners_data)):
+            entry = self.winners_data[i]
+            if entry.startswith(f"{round_id}:"):
+                winner_data = entry[len(round_id) + 1:]
+                break
+        if not winner_data:
+            return "Round not completed"
+        
+        parts = winner_data.split("|")
+        winner_agent = parts[0].strip()
+        prize_per_unit = int(parts[1].strip()) if len(parts) > 1 else 0
+        
+        winners = {}
+        prefix = f"{round_id}:"
+        for i in range(len(self.bets)):
+            entry = self.bets[i]
+            if entry.startswith(prefix):
+                bet_parts = entry.split(":")
+                if len(bet_parts) >= 4 and bet_parts[2] == winner_agent:
+                    bettor = bet_parts[1].lower()
+                    amount = int(bet_parts[3])
+                    if bettor in winners:
+                        winners[bettor] += amount * prize_per_unit
+                    else:
+                        winners[bettor] = amount * prize_per_unit
+        
+        if not winners:
+            return f"Round {round_id} had no winners (rollover triggered)"
+        
+        result = f"Round {round_id} winners ({len(winners)} users):"
+        for addr, prize in winners.items():
+            result += f" | {addr[:6]}...{addr[-4:]}: {prize}pts"
+        return result
+
+    @gl.public.view
+    def get_user_profile(self, user_address: str) -> str:
+        total_bets = 0
+        total_winnings = 0
+        rounds_executed = 0
+        agents_supported = [0, 0, 0, 0, 0]
+        
+        for i in range(len(self.bets)):
+            entry = self.bets[i]
+            parts = entry.split(":")
+            if len(parts) >= 4 and parts[1].lower() == user_address.lower():
+                total_bets += int(parts[3])
+                if parts[2].isdigit() and 0 <= int(parts[2]) < 5:
+                    agents_supported[int(parts[2])] += int(parts[3])
+        
+        for i in range(len(self.claimed)):
+            entry = self.claimed[i]
+            parts = entry.split(":")
+            if len(parts) >= 3:
+                claim_addr = parts[1]
+                if claim_addr.lower() == user_address.lower():
+                    total_winnings += int(parts[2])
+        
+        for i in range(len(self.user_stats)):
+            entry = self.user_stats[i]
+            if entry.startswith(f"executor:{user_address.lower()}:"):
+                parts = entry.split(":")
+                if len(parts) >= 3:
+                    rounds_executed = int(parts[2])
+                    break
+        
+        favorite_agent = 0
+        max_bets = 0
+        for i in range(5):
+            if agents_supported[i] > max_bets:
+                max_bets = agents_supported[i]
+                favorite_agent = i
+        favorite_name = self._aget(str(favorite_agent), "name") or "None"
+        
+        return (
+            f"User: {user_address} | "
+            f"Total Bets: {total_bets} points | "
+            f"Total Winnings: {total_winnings} points | "
+            f"Net P/L: {total_winnings - total_bets} points | "
+            f"Rounds Executed: {rounds_executed} | "
+            f"Favorite Agent: {favorite_name} ({max_bets}pts bet)"
+        )
 
     @gl.public.view
     def get_summary(self) -> str:
@@ -161,13 +279,13 @@ class AITradingTournament(gl.Contract):
                 pass
         best_name = self._aget(best_agent_id, "name")
         return (
-            f"GenLayer AI Trading Tournament - Live Stats\n"
-            f"Current Round: {int(self.round_counter)}\n"
-            f"Total Trades Executed: {total_trades}\n"
-            f"Current Leader: {best_name} with ${best_value}\n"
-            f"Active Prize Pool: {int(self.prize_pool)} GEN\n"
-            f"Rollover Pool: {int(self.rollover_pool)} GEN\n"
-            f"Agents Active: 5"
+            f"GenLayer AI Trading Tournament - Live Stats | "
+            f"Current Round: {int(self.round_counter)} | "
+            f"Total Trades: {total_trades} | "
+            f"Leader: {best_name} with ${best_value} | "
+            f"Active Pool: {int(self.prize_pool)}pts | "
+            f"Rollover: {int(self.rollover_pool)}pts | "
+            f"Bets Placed: {len(self.bets)}"
         )
 
     @gl.public.write
@@ -175,11 +293,11 @@ class AITradingTournament(gl.Contract):
         assert not self.initialized, "Tournament already initialized"
 
         agents = [
-            ("0", "The Hawk", "Aggressive momentum trader who chases high-volatility opportunities. Buys aggressively when trends are strong upward, exits quickly at first sign of reversal. High risk, high reward style."),
-            ("1", "The Owl", "Conservative long-term investor focused on blue chips. Prefers holding BTC and ETH, avoids volatile alts. Slow and steady wins the race philosophy."),
-            ("2", "The Wolf", "Contrarian trader who buys fear and sells greed. Goes against market sentiment. Loads up when prices crash and takes profit during euphoria."),
-            ("3", "The Fox", "Diversification specialist who balances portfolio across all available assets. Never puts more than 30% in any single asset. Reduces risk through spread."),
-            ("4", "The Bear", "Bearish skeptic always looking for tops. Prefers staying in cash during uncertainty. Only enters positions with strong conviction of upside."),
+            ("0", "The Hawk", "Aggressive momentum trader who chases high-volatility opportunities."),
+            ("1", "The Owl", "Conservative long-term investor focused on blue chips."),
+            ("2", "The Wolf", "Contrarian trader who buys fear and sells greed."),
+            ("3", "The Fox", "Diversification specialist, max 30% per asset."),
+            ("4", "The Bear", "Bearish skeptic, prefers staying in cash."),
         ]
 
         for agent_id, name, personality in agents:
@@ -197,7 +315,7 @@ class AITradingTournament(gl.Contract):
             self._aset(agent_id, "losses", "0")
 
         self.initialized = True
-        return "Tournament initialized. 5 agents ready with $10,000 each. Bets can now be placed for Round 0."
+        return "Tournament initialized. 5 agents ready with $10,000 each."
 
     @gl.public.write
     def set_round_interval(self, seconds: str) -> str:
@@ -213,9 +331,9 @@ class AITradingTournament(gl.Contract):
         assert self.initialized, "Tournament not initialized"
         assert agent_id in ("0", "1", "2", "3", "4"), "Invalid agent ID"
 
-        bet_amount = int(gl.message.value)
-        assert bet_amount > 0, "Must send GEN to place a bet"
-
+        self.block_counter = u256(int(self.block_counter) + 1)
+        
+        bet_amount = 1
         caller = str(gl.message.sender_address)
         current_round = str(int(self.round_counter))
 
@@ -223,7 +341,15 @@ class AITradingTournament(gl.Contract):
         self.prize_pool = u256(int(self.prize_pool) + bet_amount)
 
         agent_name = self._aget(agent_id, "name")
-        return f"Bet placed: {bet_amount} GEN on {agent_name} for Round {current_round}. Total pool: {int(self.prize_pool)} GEN."
+        
+        total_user_bets = 0
+        for i in range(len(self.bets)):
+            entry = self.bets[i]
+            parts = entry.split(":")
+            if len(parts) >= 4 and parts[0] == current_round and parts[1].lower() == caller.lower() and parts[2] == agent_id:
+                total_user_bets += int(parts[3])
+        
+        return f"Bet placed on {agent_name} for Round {current_round}. Your total on this agent: {total_user_bets}pts. Pool: {int(self.prize_pool)}pts."
 
     @gl.public.write
     def claim_winnings(self, round_id: str) -> str:
@@ -243,7 +369,7 @@ class AITradingTournament(gl.Contract):
 
         claim_key = f"{round_id}:{caller.lower()}"
         for i in range(len(self.claimed)):
-            if self.claimed[i].startswith(claim_key):
+            if self.claimed[i].startswith(claim_key + ":"):
                 return "Already claimed for this round"
 
         total_winnings = 0
@@ -260,19 +386,29 @@ class AITradingTournament(gl.Contract):
                         total_winnings += bet_amount * prize_per_unit
 
         if total_winnings == 0:
-            return "No winnings to claim for this round"
+            return "No winnings to claim for this round (your agent did not win)"
 
         self.claimed.append(f"{claim_key}:{total_winnings}")
-        return f"Claimed {total_winnings} GEN from Round {round_id}."
+        return f"Claimed {total_winnings} points from Round {round_id}!"
 
     @gl.public.write
     def execute_round(self) -> str:
         assert self.initialized, "Tournament not initialized"
 
-        current_time = int(gl.message.block_timestamp) if hasattr(gl.message, 'block_timestamp') else 0
-        if int(self.last_round_timestamp) > 0:
-            elapsed = current_time - int(self.last_round_timestamp)
-            assert elapsed >= int(self.min_round_interval), f"Wait {int(self.min_round_interval) - elapsed} more seconds before next round"
+        self.block_counter = u256(int(self.block_counter) + 1)
+        current_block = int(self.block_counter)
+        last_block = int(self.last_round_block)
+        interval = int(self.min_round_interval)
+        
+        if last_block > 0:
+            blocks_passed = current_block - last_block
+            estimated_seconds = blocks_passed * 30
+            assert estimated_seconds >= interval, f"Wait {interval - estimated_seconds} more seconds before next round"
+
+        try:
+            current_time = int(gl.message.block_timestamp)
+        except Exception:
+            current_time = current_block * 30
 
         round_id = str(int(self.round_counter))
         executor = str(gl.message.sender_address)
@@ -306,13 +442,11 @@ SOL: ${prices['sol']}
 BNB: ${prices['bnb']}
 HYPE: ${prices['hype']}
 
-AGENT 0 - The Hawk (Aggressive momentum trader, high risk high reward)
-AGENT 1 - The Owl (Conservative, prefers BTC and ETH only)
-AGENT 2 - The Wolf (Contrarian, buys fear sells greed)
-AGENT 3 - The Fox (Diversifier, max 30% per asset)
-AGENT 4 - The Bear (Skeptic, mostly stays in cash)
-
-For each agent, decide ONE action based on their personality.
+AGENT 0 - The Hawk (Aggressive momentum trader)
+AGENT 1 - The Owl (Conservative)
+AGENT 2 - The Wolf (Contrarian)
+AGENT 3 - The Fox (Diversifier)
+AGENT 4 - The Bear (Skeptic)
 
 Respond ONLY with this JSON:
 {{
@@ -322,15 +456,15 @@ Respond ONLY with this JSON:
   "bnb_price": {prices['bnb']},
   "hype_price": {prices['hype']},
   "agent_0": {{"action": "BUY", "asset": "sol", "percentage": 50, "reason": "Strong momentum"}},
-  "agent_1": {{"action": "BUY", "asset": "btc", "percentage": 40, "reason": "Long term play"}},
-  "agent_2": {{"action": "HOLD", "asset": "none", "percentage": 0, "reason": "Waiting for fear"}},
+  "agent_1": {{"action": "BUY", "asset": "btc", "percentage": 40, "reason": "Long term"}},
+  "agent_2": {{"action": "HOLD", "asset": "none", "percentage": 0, "reason": "Waiting"}},
   "agent_3": {{"action": "BUY", "asset": "eth", "percentage": 20, "reason": "Diversification"}},
-  "agent_4": {{"action": "HOLD", "asset": "none", "percentage": 0, "reason": "Market uncertain"}}
+  "agent_4": {{"action": "HOLD", "asset": "none", "percentage": 0, "reason": "Uncertain"}}
 }}
 
-action must be exactly BUY, SELL, or HOLD.
+action must be BUY, SELL, or HOLD.
 asset must be btc, eth, sol, bnb, hype, or none.
-percentage is an integer 0 to 100.
+percentage is integer 0 to 100.
 No extra text."""
 
             result = gl.nondet.exec_prompt(prompt)
@@ -436,7 +570,7 @@ No extra text."""
         winner_name = self._aget(winner_id, "name")
 
         total_pool = int(self.prize_pool) + int(self.rollover_pool)
-        executor_reward = (total_pool * 5) // 100
+        executor_reward = (total_pool * 5) // 100 if total_pool > 0 else 1
         winners_pool = total_pool - executor_reward
 
         winning_bets = 0
@@ -455,20 +589,38 @@ No extra text."""
         else:
             self.rollover_pool = u256(winners_pool)
 
+        executor_key = f"executor:{executor.lower()}:"
+        executor_count = 0
+        found_idx = -1
+        for i in range(len(self.user_stats)):
+            entry = self.user_stats[i]
+            if entry.startswith(executor_key):
+                parts = entry.split(":")
+                if len(parts) >= 3:
+                    executor_count = int(parts[2])
+                    found_idx = i
+                    break
+        executor_count += 1
+        if found_idx >= 0:
+            self.user_stats[found_idx] = f"{executor_key}{executor_count}"
+        else:
+            self.user_stats.append(f"{executor_key}{executor_count}")
+
         self.winners_data.append(f"{round_id}:{winner_id}|{prize_per_unit}|executor={executor}|reward={executor_reward}")
         self.prize_pool = u256(0)
 
         round_record = (
             f"R{round_id} | Winner: {winner_name} (+${best_gain}) | "
             f"Prices: BTC=${prices['btc']} ETH=${prices['eth']} SOL=${prices['sol']} BNB=${prices['bnb']} HYPE=${prices['hype']} | "
-            f"Pool: {total_pool} GEN | Executor Reward: {executor_reward} GEN | "
+            f"Pool: {total_pool}pts | Executor Reward: {executor_reward}pts | "
             + " | ".join(round_summary)
         )
         self.round_log.append(f"{round_id}:{round_record}")
         self.round_counter = u256(int(self.round_counter) + 1)
         self.last_round_timestamp = u256(current_time)
+        self.last_round_block = u256(current_block)
 
-        return f"Round {round_id} executed. Winner: {winner_name} with +${best_gain}. Executor reward: {executor_reward} GEN."
+        return f"Round {round_id} executed! Winner: {winner_name} with +${best_gain}. Executor reward: {executor_reward}pts."
 
     def _aget(self, agent_id: str, field: str) -> str:
         key = f"{agent_id}_{field}:"
