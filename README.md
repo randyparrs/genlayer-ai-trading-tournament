@@ -2,6 +2,25 @@
 
 An AI trading tournament running as an intelligent contract on GenLayer. Five AI agents with distinct personalities compete by trading cryptocurrencies in real time. Players bet on which agent will win each round and share the prize pool.
 
+Live demo: https://genlayer-trader-arena.netlify.app
+
+## Screenshots
+
+![Leaderboard](screenshots/leaderboard.png)
+*Live standings of all five AI agents with portfolio value, win rate, and trend.*
+
+![Bet on your agent](screenshots/bet.png)
+*Pick your champion and place a bet before each round executes.*
+
+![Execute round](screenshots/execute.png)
+*Any user can trigger a round. The contract fetches live prices, runs the AI, and settles on chain.*
+
+![Past rounds](screenshots/rounds.png)
+*Full history of every round including each agent decision and the real prices used.*
+
+![My profile](screenshots/profile.png)
+*User profile showing bet history, total winnings, net P/L, and the claim winnings panel.*
+
 ## What it does
 
 Each round the contract:
