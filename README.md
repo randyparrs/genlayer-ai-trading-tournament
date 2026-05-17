@@ -1,140 +1,117 @@
-# Trader Arena: AI Trading Tournament on GenLayer
+# Trader Arena
 
-Trader Arena is an on-chain AI trading tournament where five autonomous agents
-compete by trading crypto with real market data. It runs as an Intelligent
-Contract on [GenLayer](https://genlayer.com) and uses on-chain LLM calls, live web
-access and Optimistic Democracy consensus, things a normal smart contract simply
-cannot do.
+An AI trading tournament running as an intelligent contract on GenLayer. Five AI agents with distinct personalities compete by trading cryptocurrencies in real time. Players bet on which agent will win each round and share the prize pool.
 
-Players bet symbolic points on the agent they think will win the round. The
-contract fetches real prices, lets each AI agent make a trading decision, picks a
-winner and splits the prize pool among the players who backed it.
+## What it does
 
-## Live Deployment
+Each round the contract:
 
-| Item | Value |
-|------|-------|
-| Network | GenLayer Studio (chain `61999`) |
-| Contract address | `0xA3af2C172615871e285012976A1A65914882a314` |
-| Frontend repo | https://github.com/randyparrs/genlayer-trader-arena-frontend |
+1. Fetches live crypto prices from the CoinGecko API using `gl.nondet.web.get`
+2. Calls an LLM via `gl.nondet.exec_prompt` so each agent decides to BUY, SELL, or HOLD based on its personality
+3. Executes the trades using integer arithmetic and updates each portfolio
+4. Determines the winner by portfolio gain and distributes the prize pool to winning bettors
 
-## Why GenLayer
+The validator function checks that all validators agree on the AI result before it is written on chain, satisfying GenLayer's Optimistic Democracy consensus.
 
-A standard smart contract is deterministic and isolated. It cannot run AI models
-and it cannot reach the internet. Trader Arena needs both, and that is exactly
-what GenLayer Intelligent Contracts make possible:
+## The five agents
 
-- **On-chain LLM calls.** Every round the contract calls `gl.nondet.exec_prompt`
-  so an LLM produces the trading decision for all five agents based on their
-  personalities.
-- **Live web access.** The contract reads current crypto prices straight from the
-  CoinGecko API with `gl.nondet.web.get`, from inside on-chain code.
-- **Optimistic Democracy.** The non-deterministic AI output is wrapped in
-  `gl.vm.run_nondet_unsafe` together with a validator function, so several
-  validators independently verify the result before it is accepted.
-
-## The Agents
-
-Five agents start the tournament with $10,000 each. Every agent has its own
-trading personality, and that personality is fed into the LLM prompt:
-
-| ID | Agent | Strategy |
-|----|-------|----------|
-| 0 | The Hawk | Aggressive momentum trader chasing high-volatility opportunities |
-| 1 | The Owl | Conservative long-term investor focused on blue chips |
-| 2 | The Wolf | Contrarian trader who buys fear and sells greed |
+| ID | Name | Personality |
+|----|------|-------------|
+| 0 | The Hawk | Aggressive momentum trader |
+| 1 | The Owl | Conservative long-term investor |
+| 2 | The Wolf | Contrarian, buys fear and sells greed |
 | 3 | The Fox | Diversification specialist |
-| 4 | The Bear | Bearish skeptic that prefers staying in cash |
+| 4 | The Bear | Bearish skeptic, prefers cash |
 
-Tradable assets are BTC, ETH, SOL, BNB and HYPE.
+Each agent starts with $10,000 and trades BTC, ETH, SOL, BNB, and HYPE.
 
-## How a Round Works
+## Key technical decisions
 
-1. Players call `place_bet` to back an agent. Each bet costs 1 point and you can
-   bet multiple times to raise your stake.
-2. Once enough time has passed, anyone can call `execute_round`.
-3. The contract fetches live prices from CoinGecko.
-4. An LLM produces a BUY, SELL or HOLD decision for each agent.
-5. A validator function checks the AI output and validators reach consensus.
-6. Each agent portfolio is recalculated and the agent with the best gain wins.
-7. The prize pool is split among the players who backed the winner. The executor
-   earns 5% of the pool. If nobody backed the winner, the pool rolls over to the
-   next round.
+### Integer arithmetic instead of floats
 
-## Round Timing
+The first version used floating point operations for the trading logic. This broke consensus because different validators running on different hardware got slightly different results for the same calculation, causing the round to fail.
 
-GenLayer Studio does not expose a reliable block timestamp, so round timing is
-handled with an internal `block_counter` that increments on every write call.
-`min_round_interval` (300 seconds by default) controls how long to wait between
-rounds, and `can_execute_now` returns either `READY:0` or `WAIT:<seconds>` so the
-frontend can show a live countdown.
+The fix was to rewrite all trading arithmetic using integers scaled by 10000, where 10000 represents 1.0 unit of any asset:
 
-## Deterministic Arithmetic
+```python
+# BUY: spend dollars, get scaled asset units
+spend = cash * percentage // 100
+bought_scaled = spend * 10000 // prices[asset]
 
-All math in the contract uses integers, never floats, because every validator has
-to reach the exact same result for consensus to hold. Asset balances are stored as
-integers scaled by 10,000 (so `10000` means 1.0 unit) and the `_fmt_asset` helper
-formats them for display.
+# SELL: convert scaled units back to dollars
+proceeds = sell_scaled * prices[asset] // 10000
 
-## Contract Interface
+# Portfolio value: sum all positions in dollars
+portfolio_value += scaled * prices[token] // 10000
+```
 
-### Write methods
+This guarantees every validator produces the exact same result regardless of hardware or runtime environment.
 
-| Method | Description |
-|--------|-------------|
-| `initialize_tournament()` | Sets up the 5 agents. Call once after deploy |
-| `place_bet(agent_id)` | Bet 1 point on an agent (`"0"` to `"4"`) |
-| `execute_round()` | Run a round: fetch prices, AI decides, distribute pool |
-| `claim_winnings(round_id)` | Claim your share of a finished round |
-| `set_round_interval(seconds)` | Owner only. Change the wait time between rounds |
+### Internal block counter for round timing
+
+GenLayer Studio does not expose a reliable block timestamp. To prevent rounds from being executed too frequently, the contract maintains its own `block_counter` that increments on every write call. The minimum interval between rounds is enforced in blocks, with an estimated conversion of 30 seconds per block.
+
+### Rollover pool
+
+If no player bet on the winning agent in a given round, the prize pool rolls over to the next round. This creates larger prize pools over time and incentivizes continued participation.
+
+## Contract methods
 
 ### View methods
 
 | Method | Description |
 |--------|-------------|
-| `get_leaderboard()` | Current portfolio value of every agent |
-| `get_agent(agent_id)` | Full detail for one agent |
-| `get_pool_status()` | Prize pool, rollover, round and timing info |
-| `can_execute_now()` | Whether a round can run yet (`READY` or `WAIT`) |
-| `get_round(round_id)` | Detailed log of a past round |
-| `get_round_count()` | Total rounds played |
-| `get_active_bets_summary()` | Bets placed in the current round |
-| `get_bets_for_round(round_id)` | Bets for a specific round |
-| `get_my_bets(address)` | Betting history for an address |
-| `get_user_profile(address)` | Aggregate stats for a player |
-| `get_round_winner(round_id)` | Winner of a finished round |
-| `get_round_winning_bets(round_id)` | Per-player payout for a finished round |
-| `get_agent_trades(agent_id)` | Recent trades made by an agent |
-| `get_summary()` | High-level tournament stats |
+| `get_agent(agent_id)` | Full agent state including portfolio and trade stats |
+| `get_leaderboard()` | Current standings for all five agents |
+| `get_round(round_id)` | Full log of a completed round |
+| `get_agent_trades(agent_id)` | Last 10 trades for an agent |
+| `get_bets_for_round(round_id)` | Bet totals per agent for a round |
+| `get_my_bets(user_address)` | All bets placed by a user |
+| `get_round_winner(round_id)` | Winner and prize per unit for a round |
+| `get_round_winning_bets(round_id)` | All winning bettors and their prizes |
+| `get_user_profile(user_address)` | Total bets, winnings, and favorite agent |
+| `get_pool_status()` | Current prize pool, rollover, and timing info |
+| `can_execute_now()` | Whether a new round can be triggered |
+| `get_summary()` | Overall tournament stats and current leader |
 
-## Deploy and Test
+### Write methods
 
-The contract has two constructor variants. The Studio version takes
-`owner_address` as a string and wraps it with `Address(owner_address)`, because
-Studio passes the constructor argument as a primitive string. The GitHub version
-takes `owner_address` directly as an `Address`, which is what the `genvm-lint`
-toolchain expects.
+| Method | Description |
+|--------|-------------|
+| `initialize_tournament()` | Sets up the five agents with starting portfolios |
+| `place_bet(agent_id)` | Bet 1 point on an agent for the current round |
+| `execute_round()` | Fetches prices, runs AI decisions, settles the round |
+| `claim_winnings(round_id)` | Claims prize points for a winning bet |
+| `set_round_interval(seconds)` | Owner only, updates the minimum round interval |
 
-The contract lives in `genlayer-trader-arena.py`. Steps to deploy on GenLayer
-Studio:
+## How to run
 
-1. Open [GenLayer Studio](https://studio.genlayer.com) and paste the contents of
-   `genlayer-trader-arena.py`.
-2. Deploy in Normal Full Consensus mode and pass your wallet as `owner_address`.
-3. Call `initialize_tournament()` once.
-4. Call `place_bet("0")` to add to the prize pool.
-5. Optionally call `set_round_interval("60")` to shorten the wait while testing.
-6. Wait for the interval and then call `execute_round()`.
-7. Read `get_leaderboard()` to see the updated standings.
+1. Open GenLayer Studio
+2. Deploy `genlayer-trader-arena.py` with your wallet address as `owner_address`
+3. Call `initialize_tournament()` to set up the five agents
+4. Call `place_bet(agent_id)` with any agent ID from 0 to 4
+5. Call `execute_round()` to trigger a round with live prices and AI decisions
+6. Call `get_leaderboard()` to see the standings
+7. Call `claim_winnings(round_id)` if your agent won
 
-## Tech Stack
+## Storage
 
-- Python Intelligent Contract on GenLayer (`py-genlayer:test`)
-- `gl.nondet.exec_prompt` for AI agent decisions
-- `gl.nondet.web.get` against the CoinGecko API for live prices
-- `gl.vm.run_nondet_unsafe` with a JSON validating validator function
-- React, Vite and genlayer-js frontend ([repo](https://github.com/randyparrs/genlayer-trader-arena-frontend))
+All data is stored in flat `DynArray[str]` arrays using a `key:value` pattern. This avoids the use of `dict` or `list` types which are not valid as GenLayer storage fields.
 
-## License
+```
+agent_data    -> agent portfolio and trade data
+trade_history -> log of every trade executed
+round_log     -> summary of every completed round
+bets          -> all bets placed by all users
+winners_data  -> winner and prize info per round
+claimed       -> record of claimed winnings
+user_stats    -> executor counts per user
+```
 
-MIT
+## Dependencies
+
+```python
+# { "Depends": "py-genlayer:test" }
+```
+
+Requires the GenLayer Python SDK.
