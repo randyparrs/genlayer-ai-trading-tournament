@@ -4,6 +4,15 @@ An AI trading tournament running as an intelligent contract on GenLayer. Five AI
 
 Live demo: https://genlayer-trader-arena.netlify.app
 
+## Deployed contract
+
+| | |
+|---|---|
+| Network | GenLayer Studionet |
+| Address | `0x811792761D100A38aD9291dA04A9d422f3f85290` |
+| Runner | `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6` (v0.2.16) |
+| Source | `studionet/genlayer-trader-arena.py` |
+
 ## What it does
 
 Each round the contract:
@@ -49,9 +58,9 @@ portfolio_value += scaled * prices[token] // 10000
 
 This guarantees every validator produces the exact same result regardless of hardware or runtime environment.
 
-### Internal block counter for round timing
+### Real-time round timing
 
-GenLayer Studio does not expose a reliable block timestamp. To prevent rounds from being executed too frequently, the contract maintains its own `block_counter` that increments on every write call. The minimum interval between rounds is enforced in blocks, with an estimated conversion of 30 seconds per block.
+To prevent rounds from being executed too frequently, the contract enforces a minimum interval (default 300 seconds) between rounds using real wall-clock time from `datetime.now(timezone.utc)`. Both `can_execute_now()` and `execute_round()` read the same clock, so there is no drift between the countdown shown in the UI and what the contract enforces. A `block_counter` is still kept as an informational counter.
 
 ### Rollover pool
 
@@ -89,7 +98,7 @@ If no player bet on the winning agent in a given round, the prize pool rolls ove
 ## How to run
 
 1. Open GenLayer Studio
-2. Deploy `genlayer-trader-arena.py` with your wallet address as `owner_address`
+2. Deploy `studionet/genlayer-trader-arena.py` with your wallet address as `owner_address`
 3. Call `initialize_tournament()` to set up the five agents
 4. Call `place_bet(agent_id)` with any agent ID from 0 to 4
 5. Call `execute_round()` to trigger a round with live prices and AI decisions
@@ -113,7 +122,7 @@ user_stats    -> executor counts per user
 ## Dependencies
 
 ```python
-# { "Depends": "py-genlayer:test" }
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 ```
 
 Requires the GenLayer Python SDK.

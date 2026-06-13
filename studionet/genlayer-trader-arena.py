@@ -1,6 +1,7 @@
-# { "Depends": "py-genlayer:test" }
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 import json
+from datetime import datetime, timezone
 from genlayer import *
 
 
@@ -23,8 +24,8 @@ class AITradingTournament(gl.Contract):
     claimed: DynArray[str]
     user_stats: DynArray[str]
 
-    def __init__(self, owner_address: Address):
-        self.owner = owner_address
+    def __init__(self, owner_address: str):
+        self.owner = Address(owner_address)
         self.round_counter = u256(0)
         self.initialized = False
         self.min_round_interval = u256(300)
@@ -105,17 +106,18 @@ class AITradingTournament(gl.Contract):
 
     @gl.public.view
     def can_execute_now(self) -> str:
-        if int(self.last_round_block) == 0:
+        # Si nunca se ejecuto un round, esta listo
+        if int(self.last_round_timestamp) == 0:
             return "READY:0"
 
-        blocks_passed = int(self.block_counter) - int(self.last_round_block)
-        estimated_seconds = blocks_passed * 30
+        now = int(datetime.now(timezone.utc).timestamp())
+        elapsed = now - int(self.last_round_timestamp)
         interval = int(self.min_round_interval)
 
-        if estimated_seconds >= interval:
+        if elapsed >= interval:
             return "READY:0"
         else:
-            remaining = interval - estimated_seconds
+            remaining = interval - elapsed
             return f"WAIT:{remaining}"
 
     @gl.public.view
@@ -394,20 +396,19 @@ class AITradingTournament(gl.Contract):
     def execute_round(self) -> str:
         assert self.initialized, "Tournament not initialized"
 
-        self.block_counter = u256(int(self.block_counter) + 1)
-        current_block = int(self.block_counter)
-        last_block = int(self.last_round_block)
+        # FIX: validar timing con tiempo real (timestamp de la tx)
+        # tal como lo hace can_execute_now, asi no hay desfase
+        current_time = int(datetime.now(timezone.utc).timestamp())
+        last_time = int(self.last_round_timestamp)
         interval = int(self.min_round_interval)
 
-        if last_block > 0:
-            blocks_passed = current_block - last_block
-            estimated_seconds = blocks_passed * 30
-            assert estimated_seconds >= interval, f"Wait {interval - estimated_seconds} more seconds before next round"
+        if last_time > 0:
+            elapsed = current_time - last_time
+            assert elapsed >= interval, f"Wait {interval - elapsed} more seconds before next round"
 
-        try:
-            current_time = int(gl.message.block_timestamp)
-        except Exception:
-            current_time = current_block * 30
+        # block_counter se mantiene solo como contador informativo
+        self.block_counter = u256(int(self.block_counter) + 1)
+        current_block = int(self.block_counter)
 
         round_id = str(int(self.round_counter))
         executor = str(gl.message.sender_address)
